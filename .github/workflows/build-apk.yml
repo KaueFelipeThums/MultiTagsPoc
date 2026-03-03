@@ -16,30 +16,46 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       integradora: ${{ steps.extract.outputs.integradora }}
+      modelo: ${{ steps.extract.outputs.modelo }}
       versao: ${{ steps.extract.outputs.versao }}
       tag_completa: ${{ steps.extract.outputs.tag_completa }}
       apk_name: ${{ steps.extract.outputs.apk_name }}
     steps:
-      - name: Extrair integradora e versão da tag
+      - name: Extrair integradora, modelo e versão da tag
         id: extract
         run: |
           TAG=${{ github.ref_name }}
           echo "tag_completa=$TAG" >> $GITHUB_OUTPUT
 
-          # Extrai integradora (parte antes do -v)
-          INTEGRADORA=$(echo "$TAG" | sed -E 's/^([a-zA-Z]+)-v.*/\1/' | tr '[:lower:]' '[:upper:]')
+          # Extrai integradora (primeira parte antes de - ou -v)
+          INTEGRADORA=$(echo "$TAG" | sed -E 's/^([a-zA-Z]+)(-[a-zA-Z0-9]+)?-v.*/\1/' | tr '[:lower:]' '[:upper:]')
           echo "integradora=$INTEGRADORA" >> $GITHUB_OUTPUT
 
+          # Extrai modelo (parte entre integradora e -v, se existir)
+          # Se houver integradora-modelo-v*, extrai modelo
+          # Se houver integradora-v*, modelo fica vazio
+          if echo "$TAG" | grep -qE "^[a-zA-Z]+-[a-zA-Z0-9]+-v"; then
+            MODELO=$(echo "$TAG" | sed -E 's/^[a-zA-Z]+-([a-zA-Z0-9]+)-v.*/\1/' | tr '[:lower:]' '[:upper:]')
+          else
+            MODELO=""
+          fi
+          echo "modelo=$MODELO" >> $GITHUB_OUTPUT
+
           # Extrai versão (parte depois do -v)
-          VERSAO=$(echo "$TAG" | sed -E 's/^[a-zA-Z]+-v//')
+          VERSAO=$(echo "$TAG" | sed -E 's/^[a-zA-Z]+(-[a-zA-Z0-9]+)?-v//')
           echo "versao=$VERSAO" >> $GITHUB_OUTPUT
 
-          # Nome do APK
-          APK_NAME="app-$INTEGRADORA-$VERSAO.apk"
+          # Nome do APK (inclui modelo se existir)
+          if [ -z "$MODELO" ]; then
+            APK_NAME="app-$INTEGRADORA-$VERSAO.apk"
+          else
+            APK_NAME="app-$INTEGRADORA-$MODELO-$VERSAO.apk"
+          fi
           echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
 
           echo "Tag: $TAG"
           echo "Integradora: $INTEGRADORA"
+          echo "Modelo: ${MODELO:-vazio}"
           echo "Versão: $VERSAO"
           echo "APK: $APK_NAME"
 
@@ -74,6 +90,7 @@ jobs:
         run: |
           echo "ADMINISTRATOR=${{ needs.extract-tag-info.outputs.integradora }}" > .env
           echo "APP_VERSION=${{ needs.extract-tag-info.outputs.versao }}" >> .env
+          echo "MODEL=${{ needs.extract-tag-info.outputs.modelo }}" >> .env
           cat .env
 
       - name: Instalar dependências
@@ -131,9 +148,7 @@ jobs:
         with:
           files: android/app/build/outputs/apk/release/${{ needs.extract-tag-info.outputs.apk_name }}
           body: |
-            ## 📱 Build APK - ${{ needs.extract-tag-info.outputs.integradora }}
-
-            Build automático gerado a partir da tag.
+            ## 📱 APK - ${{ needs.extract-tag-info.outputs.integradora }}
 
             **Informações:**
             - **Integradora**: ${{ needs.extract-tag-info.outputs.integradora }}
@@ -141,18 +156,46 @@ jobs:
             - **Tag**: `${{ needs.extract-tag-info.outputs.tag_completa }}`
             - **Data**: ${{ github.event.head_commit.timestamp }}
 
-            **Como Instalar:**
-            1. Baixe o APK acima
-            2. Transfira para seu dispositivo Android
-            3. Abra o arquivo e instale (pode ser necessário permitir instalação de fontes desconhecidas)
-
-            **Download Direto:**
             ```
             APK: app-${{ needs.extract-tag-info.outputs.integradora }}-${{ needs.extract-tag-info.outputs.versao }}.apk
             ```
           draft: false
           prerelease: false
-          make_latest: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Atualizar Latest por Integradora
+        run: |
+          INTEGRADORA="${{ needs.extract-tag-info.outputs.integradora }}"
+
+          # Listar todas as releases da integradora (ordenadas por versão)
+          RELEASES=$(gh release list --limit 100 --json name,isLatest | jq -r ".[] | select(.name | startswith(\"$INTEGRADORA\")) | .name" | sort -V)
+
+          if [ -z "$RELEASES" ]; then
+            echo "Nenhuma release encontrada para $INTEGRADORA"
+            exit 0
+          fi
+
+          # A última é a mais recente
+          LATEST_RELEASE=$(echo "$RELEASES" | tail -1)
+
+          echo "Releases de $INTEGRADORA encontradas:"
+          echo "$RELEASES"
+          echo ""
+          echo "Marcando $LATEST_RELEASE como Latest..."
+
+          # Desmarcar todas como latest
+          while IFS= read -r release; do
+            if [ -n "$release" ]; then
+              gh release update "$release" --latest=false 2>/dev/null || true
+            fi
+          done <<< "$RELEASES"
+
+          # Marcar apenas a mais recente como latest
+          gh release update "$LATEST_RELEASE" --latest=true
+
+          echo "✅ $LATEST_RELEASE agora é a Latest de $INTEGRADORA"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -160,8 +203,9 @@ jobs:
         run: |
           echo "✅ Build concluído com sucesso!"
           echo ""
-          echo "� Informações do Build:"
+          echo "ℹ️ Informações do Build:"
           echo "  📱 Integradora: ${{ needs.extract-tag-info.outputs.integradora }}"
+          echo "  🖥️  Modelo: ${{ needs.extract-tag-info.outputs.modelo }}"
           echo "  📦 APK: ${{ needs.extract-tag-info.outputs.apk_name }}"
           echo "  🔖 Versão: ${{ needs.extract-tag-info.outputs.versao }}"
           echo "  🏷️  Tag: ${{ needs.extract-tag-info.outputs.tag_completa }}"
