@@ -60,6 +60,32 @@ react {
 def enableProguardInReleaseBuilds = false
 
 /**
+ * Ler variáveis passadas pela pipeline ou do .env
+ */
+def administrator = project.hasProperty('ADMINISTRATOR') ? ADMINISTRATOR : "REDE"
+def appDisplayName = project.hasProperty('APP_DISPLAY_NAME') ? APP_DISPLAY_NAME : "MultiTagsPoc"
+
+// Se tiver .env, tenta ler ADMINISTRATOR de lá (fallback)
+def loadEnvFile() {
+    def envFile = file('../.env')
+    if (envFile.exists()) {
+        envFile.readLines().each { line ->
+            if (line && !line.startsWith('#')) {
+                def parts = line.split('=', 2)
+                if (parts.size() == 2) {
+                    def key = parts[0].trim()
+                    def value = parts[1].trim()
+                    if (key == 'ADMINISTRATOR' && !project.hasProperty('ADMINISTRATOR')) {
+                        administrator = value
+                    }
+                }
+            }
+        }
+    }
+}
+loadEnvFile()
+
+/**
  * The preferred build flavor of JavaScriptCore (JSC)
  *
  * For example, to use the international variant, you can use:
@@ -84,6 +110,13 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+
+        // BuildConfig fields com as informações da integradora
+        buildConfigField "String", "ADMINISTRATOR", "\"${administrator}\""
+        buildConfigField "String", "APP_DISPLAY_NAME", "\"${appDisplayName}\""
+
+        // Valores de recursos que podem ser acessados via getString()
+        resValue "string", "app_name", "MultiTagsPoc - ${administrator}"
     }
     signingConfigs {
         debug {
