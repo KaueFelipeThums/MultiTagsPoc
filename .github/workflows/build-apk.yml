@@ -105,6 +105,18 @@ jobs:
           NEW_APK_PATH="android/app/build/outputs/apk/release/${{ needs.extract-tag-info.outputs.apk_name }}"
           mv "$ORIGINAL_APK" "$NEW_APK_PATH"
           echo "APK gerado: $NEW_APK_PATH"
+          ls -lh "$NEW_APK_PATH"
+
+      - name: Verificar APK existe
+        run: |
+          APK_PATH="android/app/build/outputs/apk/release/${{ needs.extract-tag-info.outputs.apk_name }}"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "❌ ERRO: APK não encontrado em $APK_PATH"
+            ls -la android/app/build/outputs/apk/release/
+            exit 1
+          fi
+          echo "✅ APK encontrado e pronto para upload"
+          file "$APK_PATH"
 
       - name: Upload APK como artifact
         uses: actions/upload-artifact@v4
@@ -114,20 +126,33 @@ jobs:
           retention-days: 30
 
       - name: Criar Release no GitHub
+        id: release
         uses: softprops/action-gh-release@v1
         with:
           files: android/app/build/outputs/apk/release/${{ needs.extract-tag-info.outputs.apk_name }}
           body: |
-            ## Build APK - ${{ needs.extract-tag-info.outputs.integradora }}
+            ## 📱 Build APK - ${{ needs.extract-tag-info.outputs.integradora }}
 
+            Build automático gerado a partir da tag.
+
+            **Informações:**
             - **Integradora**: ${{ needs.extract-tag-info.outputs.integradora }}
             - **Versão**: ${{ needs.extract-tag-info.outputs.versao }}
-            - **Tag**: ${{ needs.extract-tag-info.outputs.tag_completa }}
+            - **Tag**: `${{ needs.extract-tag-info.outputs.tag_completa }}`
+            - **Data**: ${{ github.event.head_commit.timestamp }}
 
-            ### Download
-            Baixe o APK acima para instalar no seu dispositivo Android.
+            **Como Instalar:**
+            1. Baixe o APK acima
+            2. Transfira para seu dispositivo Android
+            3. Abra o arquivo e instale (pode ser necessário permitir instalação de fontes desconhecidas)
+
+            **Download Direto:**
+            ```
+            APK: app-${{ needs.extract-tag-info.outputs.integradora }}-${{ needs.extract-tag-info.outputs.versao }}.apk
+            ```
           draft: false
           prerelease: false
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -135,7 +160,14 @@ jobs:
         run: |
           echo "✅ Build concluído com sucesso!"
           echo ""
-          echo "📱 Integradora: ${{ needs.extract-tag-info.outputs.integradora }}"
-          echo "📦 APK: ${{ needs.extract-tag-info.outputs.apk_name }}"
-          echo "🔖 Versão: ${{ needs.extract-tag-info.outputs.versao }}"
-          echo "🏷️  Tag: ${{ needs.extract-tag-info.outputs.tag_completa }}"
+          echo "� Informações do Build:"
+          echo "  📱 Integradora: ${{ needs.extract-tag-info.outputs.integradora }}"
+          echo "  📦 APK: ${{ needs.extract-tag-info.outputs.apk_name }}"
+          echo "  🔖 Versão: ${{ needs.extract-tag-info.outputs.versao }}"
+          echo "  🏷️  Tag: ${{ needs.extract-tag-info.outputs.tag_completa }}"
+          echo ""
+          echo "📥 Download:"
+          echo "  GitHub → Releases → ${{ needs.extract-tag-info.outputs.tag_completa }}"
+          echo ""
+          echo "🔗 Link direto:"
+          echo "  https://github.com/${{ github.repository }}/releases/tag/${{ needs.extract-tag-info.outputs.tag_completa }}"
