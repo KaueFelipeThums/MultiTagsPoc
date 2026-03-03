@@ -1,0 +1,141 @@
+name: Build APK por Integradora
+
+on:
+  push:
+    tags:
+      # Padrão: integradora-vX.Y.Z
+      # Exemplos: rede-v1.2.3, stone-v1.0.1, getnet-v0.2.1
+      - '*-v*'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  extract-tag-info:
+    runs-on: ubuntu-latest
+    outputs:
+      integradora: ${{ steps.extract.outputs.integradora }}
+      versao: ${{ steps.extract.outputs.versao }}
+      tag_completa: ${{ steps.extract.outputs.tag_completa }}
+      apk_name: ${{ steps.extract.outputs.apk_name }}
+    steps:
+      - name: Extrair integradora e versão da tag
+        id: extract
+        run: |
+          TAG=${{ github.ref_name }}
+          echo "tag_completa=$TAG" >> $GITHUB_OUTPUT
+
+          # Extrai integradora (parte antes do -v)
+          INTEGRADORA=$(echo "$TAG" | sed -E 's/^([a-zA-Z]+)-v.*/\1/' | tr '[:lower:]' '[:upper:]')
+          echo "integradora=$INTEGRADORA" >> $GITHUB_OUTPUT
+
+          # Extrai versão (parte depois do -v)
+          VERSAO=$(echo "$TAG" | sed -E 's/^[a-zA-Z]+-v//')
+          echo "versao=$VERSAO" >> $GITHUB_OUTPUT
+
+          # Nome do APK
+          APK_NAME="app-$INTEGRADORA-$VERSAO.apk"
+          echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+
+          echo "Tag: $TAG"
+          echo "Integradora: $INTEGRADORA"
+          echo "Versão: $VERSAO"
+          echo "APK: $APK_NAME"
+
+  build:
+    needs: extract-tag-info
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          build-tools-version: '34.0.0'
+
+      - name: Criar arquivo .env
+        run: |
+          echo "ADMINISTRATOR=${{ needs.extract-tag-info.outputs.integradora }}" > .env
+          echo "APP_VERSION=${{ needs.extract-tag-info.outputs.versao }}" >> .env
+          cat .env
+
+      - name: Instalar dependências
+        run: npm install
+
+      - name: Atualizar versão no package.json
+        run: |
+          node -e "
+          const pkg = require('./package.json');
+          pkg.version = '${{ needs.extract-tag-info.outputs.versao }}';
+          require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+
+      - name: Atualizar versão no build.gradle
+        run: |
+          sed -i "s/versionName \".*\"/versionName \"${{ needs.extract-tag-info.outputs.versao }}\"/g" android/app/build.gradle
+          cat android/app/build.gradle | grep -i versionName
+
+      - name: Build APK (Release)
+        run: |
+          cd android
+          ./gradlew clean bundleRelease assembleRelease \
+            -PAPP_DISPLAY_NAME="MultiTagsPoc - ${{ needs.extract-tag-info.outputs.integradora }}" \
+            -PADMINISTRATOR="${{ needs.extract-tag-info.outputs.integradora }}"
+
+      - name: Renomear APK
+        run: |
+          ORIGINAL_APK=$(find android/app/build/outputs/apk/release -name "*.apk" | head -1)
+          NEW_APK_PATH="android/app/build/outputs/apk/release/${{ needs.extract-tag-info.outputs.apk_name }}"
+          mv "$ORIGINAL_APK" "$NEW_APK_PATH"
+          echo "APK gerado: $NEW_APK_PATH"
+
+      - name: Upload APK como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-release
+          path: android/app/build/outputs/apk/release/${{ needs.extract-tag-info.outputs.apk_name }}
+          retention-days: 30
+
+      - name: Criar Release no GitHub
+        uses: softprops/action-gh-release@v1
+        with:
+          files: android/app/build/outputs/apk/release/${{ needs.extract-tag-info.outputs.apk_name }}
+          body: |
+            ## Build APK - ${{ needs.extract-tag-info.outputs.integradora }}
+
+            - **Integradora**: ${{ needs.extract-tag-info.outputs.integradora }}
+            - **Versão**: ${{ needs.extract-tag-info.outputs.versao }}
+            - **Tag**: ${{ needs.extract-tag-info.outputs.tag_completa }}
+
+            ### Download
+            Baixe o APK acima para instalar no seu dispositivo Android.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resumo do Build
+        run: |
+          echo "✅ Build concluído com sucesso!"
+          echo ""
+          echo "📱 Integradora: ${{ needs.extract-tag-info.outputs.integradora }}"
+          echo "📦 APK: ${{ needs.extract-tag-info.outputs.apk_name }}"
+          echo "🔖 Versão: ${{ needs.extract-tag-info.outputs.versao }}"
+          echo "🏷️  Tag: ${{ needs.extract-tag-info.outputs.tag_completa }}"
